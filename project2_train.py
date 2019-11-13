@@ -49,19 +49,124 @@ import os
 import torch
 from torch import nn
 import torch.nn.functional as F
+import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets import ImageFolder
 
 from network import Network # the network you used
 
-# training process. 
-def train_net(net, trainloader, valloader):
-########## ToDo: Your codes goes below #######
-    val_accuracy = 0
-    # val_accuracy is the validation accuracy of each epoch. You can save your model base on the best validation accuracy.
+def manual_plateau(epoch):
+    if epoch >= 32:
+        return 0.5**2
+    if epoch >= 16:
+        return 0.5
+    else:
+        return 1
 
-    return val_accuracy
+# training process.
+def train_net(net, train_loader, validation_loader,
+    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ):
+########## ToDo: Your codes goes below #######
+    optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9, weight_decay=0.0001) # regularisation tecnique to reduce overfitting 
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, [manual_plateau])
+    criterion = nn.CrossEntropyLoss()
+
+    EPOCHS = 2
+    nMiniBatches = 20
+
+    net.train()
+
+    training_losses = []
+    epochs = []
+    batches = []
+    validation_losses = []
+    validation_accuracies = []
+    training_losses = []
+    training_accuracies = []
+
+    running_loss_training = 0.0
+    total_training = 0
+    correct_training = 0
+
+    running_validation_loss = 0
+    correct_validation = 0
+    total = 0
+
+
+    for epoch in range(EPOCHS):  # loop over the dataset multiple times
+        running_loss_training = 0.0
+        scheduler.step()
+
+        for i, data in enumerate(train_loader, 0):
+
+            # get the inputs
+            inputs, labels = data
+            inputs, labels = inputs.to(device),labels.to(device)
+
+            # zero the parameter gradients
+            optimizer.zero_grad()
+
+            # forward + backward + optimize
+            outputs = net(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss_training += loss.item()
+
+            # find the training accuracy
+            _, predicted_training = torch.max(outputs.data, 1)
+            total_training += labels.size(0)
+            correct_training += (predicted_training == labels).sum().item()
+
+
+            if i % nMiniBatches == nMiniBatches-1:    # print every n mini-batches
+                print('[%d, %5d] loss: %.3f' %(epoch + 1, i + 1, running_loss_training / nMiniBatches))
+
+                # find the training loss
+                training_losses.append(running_loss_training/nMiniBatches)
+                epochs.append(epoch+1)
+                batches.append(i+1 + epoch*len(train_loader.dataset)/BATCH_SIZE)
+
+                # find the training accuracy
+                training_accuracy = 100 * float(correct_training) / total_training
+                training_accuracies.append(training_accuracy)
+
+                running_loss_training = 0.0
+                total_training = 0
+                correct_training = 0
+
+                running_validation_loss = 0
+                correct_validation = 0
+                total = 0
+
+                # calulate the training loss and validation periodically
+                for i, validation_data in enumerate(validation_loader, 0):
+                    with torch.no_grad():
+                        net.eval()
+                        # get the inputs
+                        inputs, validation_labels = validation_data
+                        inputs, validation_labels = inputs.to(device),validation_labels.to(device)
+
+                        # calculate validation loss
+                        validation_outputs = net(inputs)
+                        validation_loss = criterion(validation_outputs, validation_labels)
+                        running_validation_loss += validation_loss.item()
+
+                        # calcualte validation accuracy
+                        _, predicted = torch.max(validation_outputs.data, 1)
+                        total += validation_labels.size(0)
+                        correct_validation += (predicted == validation_labels).sum().item()
+
+                validation_losses.append(running_validation_loss/len(validation_loader))
+                validation_accuracy = 100 * float(correct_validation) / total
+                validation_accuracies.append(validation_accuracy)
+
+    print('Finished Training')
+    return validation_accuracies[-1]
+
 ##############################################
 
 ############################################
@@ -71,40 +176,53 @@ def train_net(net, trainloader, valloader):
 # Normalization, RandomCrop, Resize and any other transform you think is useful. 
 # Remember to make the normalize value same as in the training transformation.
 
+NORMALIZATION = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
+
 train_transform = transforms.Compose([
-    transforms.RandomCrop(224),
-    transforms.ToTensor(), 
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    transforms.RandomResizedCrop(227),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=NORMALIZATION['mean'], std=NORMALIZATION['std']),
+])
+
+validation_transform = transforms.Compose([
+    transforms.Resize((227, 227)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=NORMALIZATION['mean'], std=NORMALIZATION['std']),
 ])
 
 ####################################
-
+BATCH_SIZE = 32
 ####################################
 # Define the training dataset and dataloader.
 # You can make some modifications, e.g. batch_size, adding other hyperparameters, etc.
 
-train_image_path = '../train/' 
-validation_image_path = '../validation/' 
+train_image_path = 'data_resized/Task1/train/'
+validation_image_path = 'data_resized/Task1/val/'
+
+import os
+print(os.listdir('.'))
 
 trainset = ImageFolder(train_image_path, train_transform)
-valset = ImageFolder(validation_image_path, train_transform)
+valset = ImageFolder(validation_image_path, validation_transform)
 
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE,
                                          shuffle=True, num_workers=2)
-valloader = torch.utils.data.DataLoader(valset, batch_size=4,
+valloader = torch.utils.data.DataLoader(valset, batch_size=BATCH_SIZE,
                                          shuffle=True, num_workers=2)
 ####################################
 
 # ==================================
-# use cuda if called with '--cuda'. 
+# use cuda if called with '--cuda'.
 # DO NOT CHANGE THIS PART.
 
-network = Network()
-if args.cuda:
-    network = network.cuda()
+device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+network = Network().to(device)
+
 
 # train and eval your trained network
-# you have to define your own 
+# you have to define your own
 val_acc = train_net(network, trainloader, valloader)
 
 print("final validation accuracy:", val_acc)
